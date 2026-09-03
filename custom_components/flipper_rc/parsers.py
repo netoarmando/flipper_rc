@@ -1,5 +1,8 @@
 """Parsing helpers for Flipper RC command strings."""
 
+SUBGHZ_FILE_PREFIX = "subghz-file:"
+SUBGHZ_FILE_UI_PREFIX = "subghz-file-ui:"
+
 
 def is_subghz_storage_path(path):
     """Return True for supported absolute Sub-GHz storage roots."""
@@ -80,7 +83,7 @@ def parse_subghz_command(code):
 
 def parse_subghz_file_command(code):
     """Parse Sub-GHz tx_from_file command string."""
-    if not isinstance(code, str) or not code.startswith("subghz-file:"):
+    if not isinstance(code, str) or not code.startswith(SUBGHZ_FILE_PREFIX):
         raise ValueError(f"Invalid Sub-GHz file command format: {code}")
 
     payload = code.split(":", 1)[1].strip()
@@ -120,3 +123,13 @@ def parse_subghz_file_command(code):
         "repeat": repeat,
         "antenna": antenna,
     }
+
+
+def parse_subghz_file_ui_command(code):
+    """Parse Sub-GHz UI-driven send command string, reusing the file command parser."""
+    if not isinstance(code, str) or not code.startswith(SUBGHZ_FILE_UI_PREFIX):
+        raise ValueError(f"Invalid Sub-GHz file UI command format: {code}")
+
+    # Same payload syntax as "subghz-file:", so translate the prefix and reuse the parser.
+    payload = code[len(SUBGHZ_FILE_UI_PREFIX):]
+    return parse_subghz_file_command(f"{SUBGHZ_FILE_PREFIX}{payload}")

@@ -12,6 +12,7 @@ _SPEC.loader.exec_module(_MODULE)
 parse_key_value_payload = _MODULE.parse_key_value_payload
 parse_subghz_command = _MODULE.parse_subghz_command
 parse_subghz_file_command = _MODULE.parse_subghz_file_command
+parse_subghz_file_ui_command = _MODULE.parse_subghz_file_ui_command
 
 
 def test_parse_key_value_payload_splits_once():
@@ -89,3 +90,59 @@ def test_parse_subghz_file_command_rejects_whitespace_path():
 def test_parse_subghz_file_command_key_value_includes_original_reason():
     with pytest.raises(ValueError, match="missing '='"):
         parse_subghz_file_command("subghz-file:path=/ext/subghz/test.sub,repeat")
+
+
+def test_parse_subghz_file_command_rejects_ui_prefix():
+    """The existing parser must not silently accept the new opt-in prefix."""
+    with pytest.raises(ValueError, match="Invalid Sub-GHz file command format"):
+        parse_subghz_file_command("subghz-file-ui:path=/ext/subghz/test.sub,repeat=1")
+
+
+def test_parse_subghz_file_ui_command_key_value_success():
+    parsed = parse_subghz_file_ui_command(
+        "subghz-file-ui:path=/ext/subghz/Garage.sub,repeat=1,antenna=0"
+    )
+    assert parsed == {
+        "path": "/ext/subghz/Garage.sub",
+        "repeat": 1,
+        "antenna": 0,
+    }
+
+
+def test_parse_subghz_file_ui_command_positional_success():
+    parsed = parse_subghz_file_ui_command("subghz-file-ui:/ext/subghz/test.sub,3,1")
+    assert parsed == {
+        "path": "/ext/subghz/test.sub",
+        "repeat": 3,
+        "antenna": 1,
+    }
+
+
+def test_parse_subghz_file_ui_command_reuses_file_parser(monkeypatch):
+    """Prefix is translated and the existing parser does the work."""
+    calls = []
+
+    def fake_parse(code):
+        calls.append(code)
+        return {"path": "/ext/subghz/test.sub", "repeat": 1, "antenna": 0}
+
+    monkeypatch.setattr(_MODULE, "parse_subghz_file_command", fake_parse)
+    parsed = _MODULE.parse_subghz_file_ui_command("subghz-file-ui:path=/ext/subghz/test.sub,repeat=1")
+
+    assert calls == ["subghz-file:path=/ext/subghz/test.sub,repeat=1"]
+    assert parsed["path"] == "/ext/subghz/test.sub"
+
+
+def test_parse_subghz_file_ui_command_rejects_plain_prefix():
+    with pytest.raises(ValueError, match="Invalid Sub-GHz file UI command format"):
+        parse_subghz_file_ui_command("subghz-file:path=/ext/subghz/test.sub,repeat=1")
+
+
+def test_parse_subghz_file_ui_command_rejects_non_ext_path():
+    with pytest.raises(ValueError, match="must start with"):
+        parse_subghz_file_ui_command("subghz-file-ui:path=/int/subghz/test.sub,repeat=1")
+
+
+def test_parse_subghz_file_ui_command_rejects_whitespace_path():
+    with pytest.raises(ValueError, match="must not contain whitespace"):
+        parse_subghz_file_ui_command("subghz-file-ui:path=/ext/subghz/test file.sub,repeat=1")

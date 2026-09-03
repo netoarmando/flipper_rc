@@ -31,7 +31,13 @@ from homeassistant.components.remote import (
 from homeassistant.helpers.storage import Store
 
 from .rc_encoder import rc_auto_encode, rc_auto_decode
-from .parsers import parse_subghz_command, parse_subghz_file_command
+from .parsers import (
+    SUBGHZ_FILE_PREFIX,
+    SUBGHZ_FILE_UI_PREFIX,
+    parse_subghz_command,
+    parse_subghz_file_command,
+    parse_subghz_file_ui_command,
+)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -232,7 +238,15 @@ class FlipperRCEntity(RemoteEntity):
                         self._last_operation = f"Sending command: {code}"
                         _LOGGER.info("Sending command, code: '%s'", code)
 
-                    if isinstance(code, str) and code.startswith("subghz-file:"):
+                    if isinstance(code, str) and code.startswith(SUBGHZ_FILE_UI_PREFIX):
+                        tx = parse_subghz_file_ui_command(code)
+                        self._last_operation = f"Sending Sub-GHz file via UI: {tx['path']}"
+                        _LOGGER.info("Sub-GHz file UI command parsed: %s", tx)
+                        await self._device.send_subghz_from_file_ui(
+                            path=tx["path"],
+                            repeat=tx["repeat"],
+                        )
+                    elif isinstance(code, str) and code.startswith(SUBGHZ_FILE_PREFIX):
                         tx = parse_subghz_file_command(code)
                         self._last_operation = f"Sending Sub-GHz file: {tx['path']}"
                         _LOGGER.info("Sub-GHz file command parsed: %s", tx)

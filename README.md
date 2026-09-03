@@ -185,6 +185,19 @@ data:
   command: subghz-file:/ext/subghz/MyRemote/test.sub,1,0
 ```
 
+Some remotes (typically dynamic/rolling-code ones such as FAAC SLH) are not replayed correctly by
+`subghz tx_from_file`, but do work when the file is opened manually in the Flipper Sub-GHz app and
+"Send" is pressed. For those, use the opt-in `subghz-file-ui:` prefix:
+
+```yaml
+service: remote.send_command
+data:
+  entity_id: remote.flipper_zero_remote_control
+  command: subghz-file-ui:path=/ext/subghz/Garage.sub,repeat=1,antenna=0
+```
+
+See [UI-Driven Send For Saved Sub-GHz Files](#ui-driven-send-for-saved-sub-ghz-files) for details.
+
 
 ## IR Code Formatting
 
@@ -331,6 +344,54 @@ Parameters:
 - `path`: full path on Flipper storage, must start with `/ext/`
 - `repeat`: repeat count
 - `antenna`: `0` internal CC1101, `1` external CC1101
+
+### UI-Driven Send For Saved Sub-GHz Files
+
+`subghz-file:` uses the `subghz tx_from_file` CLI command. That works for most saved files, but for
+dynamic/rolling-code protocols (for example FAAC SLH) the CLI can behave differently from the app:
+opening the `.sub` file in the Flipper Sub-GHz app and pressing "Send" works, while
+`subghz tx_from_file` does not.
+
+The opt-in `subghz-file-ui:` prefix reproduces that manual send. Instead of transmitting from the
+CLI, it drives the Flipper UI over the same serial CLI:
+
+1. `loader open Sub-GHz <path>` — opens the saved file in the Sub-GHz app
+2. waits for the app to load the file
+3. `input send ok press` / `input send ok short` / `input send ok release` — simulates a short press
+   of the OK button, i.e. "Send"
+4. waits for the transmission to finish and for rolling-code state to be written back to the file
+5. `loader close` — closes the app (always attempted, even if the send fails)
+
+Supported command string formats (identical to `subghz-file:`):
+
+1. Key-value format:
+
+```
+subghz-file-ui:path=/ext/subghz/Garage.sub,repeat=1,antenna=0
+```
+
+2. Positional format:
+
+```
+subghz-file-ui:/ext/subghz/Garage.sub,1,0
+```
+
+Parameters:
+
+- `path`: full path on Flipper storage, must start with `/ext/`
+- `repeat`: number of OK presses, with a short delay between them
+- `antenna`: accepted for syntax compatibility with `subghz-file:` but **ignored** — the Sub-GHz app
+  transmits using its own radio settings
+
+Notes:
+
+- `subghz-file:` behavior is unchanged; this mode is only used when you explicitly write
+  `subghz-file-ui:`. The automatically created `button.*` entities keep using `subghz-file:`.
+- This mode is slower (a few seconds per send) because it has to wait for the app to load, transmit,
+  and persist state.
+- It takes over the Flipper screen for the duration of the send, so avoid it while using the device.
+- `loader open Sub-GHz` and `input send` must be available in your firmware CLI (they are present in
+  official and common custom firmwares).
 
 ### Automatic Trigger Buttons For Saved Sub-GHz Files
 

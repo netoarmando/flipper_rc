@@ -7,6 +7,11 @@ import serial_asyncio_fast as serial_asyncio
 
 _LOGGER = logging.getLogger(__name__)
 
+# Timings for the UI-driven Sub-GHz send (loader open + simulated OK press).
+SUBGHZ_UI_LOAD_DELAY = 2.0     # let the Sub-GHz app start and load the file
+SUBGHZ_UI_TX_DELAY = 3.0       # let TX finish and rolling-code state be written back
+SUBGHZ_UI_REPEAT_DELAY = 1.0   # gap between repeated OK presses
+
 
 def _is_supported_subghz_path(path):
     return isinstance(path, str) and path.startswith("/ext/")
@@ -329,6 +334,48 @@ class FlipperIR:
         cmd = f"subghz tx_from_file {path} {int(repeat)} {int(antenna)}"
         lines = await self.command(cmd)
         self._validate_cli_response(lines, [">: subghz tx_from_file"], "subghz tx_from_file")
+
+    async def send_subghz_from_file_ui(self, path, repeat=1,
+                                       load_delay=SUBGHZ_UI_LOAD_DELAY,
+                                       tx_delay=SUBGHZ_UI_TX_DELAY,
+                                       repeat_delay=SUBGHZ_UI_REPEAT_DELAY):
+        """Send Sub-GHz file the same way a manual send does: open it in the Sub-GHz app
+        and simulate a short press of the OK button.
+
+        Unlike `subghz tx_from_file`, this keeps the app's own TX logic in the loop, which
+        matters for dynamic/rolling-code protocols that must update counters in the file.
+        """
+        if not _is_supported_subghz_path(path):
+            raise ValueError('Sub-GHz file path must start with "/ext/"')
+        if "\n" in path or "\r" in path or "\x00" in path:
+            raise ValueError("Sub-GHz file path contains forbidden control characters")
+        if int(repeat) <= 0:
+            raise ValueError("Sub-GHz repeat must be positive")
+
+        repeat_int = int(repeat)
+
+        _LOGGER.debug("Opening %s in Sub-GHz app for UI-driven send (repeat=%d)", path, repeat_int)
+        lines = await self.command(f"loader open Sub-GHz {path}")
+        try:
+            self._validate_cli_response(lines, [">: loader open"], "loader open")
+            # Wait for the app to start and parse the file before pressing Send.
+            await asyncio.sleep(load_delay)
+
+            for n in range(repeat_int):
+                if n > 0:
+                    await asyncio.sleep(repeat_delay)
+                for action in ("press", "short", "release"):
+                    input_lines = await self.command(f"input send ok {action}")
+                    self._validate_cli_response(input_lines, [">: input send"], "input send")
+                # Wait for TX to complete and for rolling-code state to be persisted
+                # before the app can be closed.
+                await asyncio.sleep(tx_delay)
+        finally:
+            try:
+                close_lines = await self.command("loader close")
+                self._validate_cli_response(close_lines, [">: loader close"], "loader close")
+            except Exception as e:
+                _LOGGER.warning("Failed to close Sub-GHz app after UI-driven send: %s", e)
 
     async def _storage_list(self, path):
         """List one storage directory and return absolute dir/file paths."""
