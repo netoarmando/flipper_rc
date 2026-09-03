@@ -227,6 +227,159 @@ class TestSendSubghzFromFileValidation:
             await ir.send_subghz_from_file(path="/ext/subghz/test.sub", antenna=2)
 
 
+class TestSendSubghzFromFileUi:
+    """Tests for the UI-driven send (loader open + simulated OK press)."""
+
+    # Zero delays keep the tests fast; production defaults are in flipper_ir.
+    NO_DELAYS = {"load_delay": 0, "tx_delay": 0, "repeat_delay": 0}
+
+    @staticmethod
+    def _make_ir(mock_protocol, mock_transport):
+        ir = FlipperIR("/dev/ttyACM0")
+        ir._protocol = mock_protocol
+        ir._transport = mock_transport
+        ir._connected = True
+        return ir
+
+    @pytest.mark.asyncio
+    async def test_command_sequence(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+        ir.command = AsyncMock(return_value=[">: "])
+
+        await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", **self.NO_DELAYS)
+
+        assert [c.args[0] for c in ir.command.call_args_list] == [
+            "loader open Sub-GHz /ext/subghz/Garage.sub",
+            "input send ok press",
+            "input send ok short",
+            "input send ok release",
+            "loader close",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_repeat_presses_ok_multiple_times(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+        ir.command = AsyncMock(return_value=[">: "])
+
+        await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", repeat=3, **self.NO_DELAYS)
+
+        sent = [c.args[0] for c in ir.command.call_args_list]
+        assert sent[0] == "loader open Sub-GHz /ext/subghz/Garage.sub"
+        assert sent[-1] == "loader close"
+        assert sent.count("input send ok press") == 3
+        assert sent.count("input send ok short") == 3
+        assert sent.count("input send ok release") == 3
+
+    @pytest.mark.asyncio
+    async def test_repeat_delays_between_transmissions(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+        ir.command = AsyncMock(return_value=[">: "])
+        sleeps = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        with patch.object(_module.asyncio, "sleep", fake_sleep):
+            await ir.send_subghz_from_file_ui(
+                path="/ext/subghz/Garage.sub", repeat=2,
+                load_delay=1, tx_delay=2, repeat_delay=3,
+            )
+
+        # load, tx, repeat gap, tx
+        assert sleeps == [1, 2, 3, 2]
+
+    @pytest.mark.asyncio
+    async def test_closes_app_after_exception(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        async def fake_command(cmd, timeout=None):
+            if cmd == "input send ok press":
+                raise TimeoutError("boom")
+            return [">: "]
+
+        ir.command = AsyncMock(side_effect=fake_command)
+
+        with pytest.raises(TimeoutError, match="boom"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", **self.NO_DELAYS)
+
+        assert "loader close" in [c.args[0] for c in ir.command.call_args_list]
+
+    @pytest.mark.asyncio
+    async def test_close_failure_does_not_mask_send_error(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        async def fake_command(cmd, timeout=None):
+            if cmd == "input send ok press":
+                raise ValueError("tx failed")
+            if cmd == "loader close":
+                raise ConnectionError("closed")
+            return [">: "]
+
+        ir.command = AsyncMock(side_effect=fake_command)
+
+        with pytest.raises(ValueError, match="tx failed"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", **self.NO_DELAYS)
+
+    @pytest.mark.asyncio
+    async def test_closes_app_when_open_response_is_an_error(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+        ir.command = AsyncMock(return_value=["Error: file not found", ">: "])
+
+        with pytest.raises(ValueError, match="loader open failed"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", **self.NO_DELAYS)
+
+        sent = [c.args[0] for c in ir.command.call_args_list]
+        assert "input send ok press" not in sent
+        assert sent[-1] == "loader close"
+
+    @pytest.mark.asyncio
+    async def test_writes_loader_open_command(self, mock_protocol, mock_transport):
+        """End-to-end through command(): verify the bytes written to the serial port."""
+        ir = self._make_ir(mock_protocol, mock_transport)
+        mock_protocol.wait_for_prompt.return_value = [">: "]
+
+        await ir.send_subghz_from_file_ui(path="/ext/subghz/Garage.sub", **self.NO_DELAYS)
+
+        written = [c.args[0].decode() for c in mock_transport.write.call_args_list]
+        assert written[0].strip() == "loader open Sub-GHz /ext/subghz/Garage.sub"
+        assert written[-1].strip() == "loader close"
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_ext_path(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        with pytest.raises(ValueError, match='must start with "/ext/"'):
+            await ir.send_subghz_from_file_ui(path="/int/subghz/test.sub")
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_with_newline(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        with pytest.raises(ValueError, match="forbidden control characters"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/test\n.sub")
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_with_carriage_return(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        with pytest.raises(ValueError, match="forbidden control characters"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/test\r.sub")
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_with_null(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        with pytest.raises(ValueError, match="forbidden control characters"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/test\x00.sub")
+
+    @pytest.mark.asyncio
+    async def test_rejects_zero_repeat(self, mock_protocol, mock_transport):
+        ir = self._make_ir(mock_protocol, mock_transport)
+
+        with pytest.raises(ValueError, match="repeat must be positive"):
+            await ir.send_subghz_from_file_ui(path="/ext/subghz/test.sub", repeat=0)
+
+
 class TestValidateCliResponse:
     """Tests for _validate_cli_response validation logic."""
 
